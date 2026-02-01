@@ -1,0 +1,32 @@
+# Files to exclude from npm package
+.git
+.gitignore
+.github/
+test/
+tests/
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+docs/
+examples/
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
+
+# Development files
+PROGRESS.md
+TEST_RESULTS.md
+INSTALL.md
+
+# Keep only what's needed for installation
+memory/
+tools/
+agents/
+scripts/
+bin/
+package.json
+README.md
+LICENSE

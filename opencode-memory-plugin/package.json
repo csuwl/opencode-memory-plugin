@@ -1,9 +1,26 @@
 {
-  "name": "opencode-memory-plugin",
+  "name": "@csuwl/opencode-memory-plugin",
   "version": "1.0.0",
   "description": "OpenClaw-style memory system for OpenCode with full automation and local vector search",
-  "author": "opencode-memory-plugin",
+  "author": "csuwl <1105865632@qq.com>",
   "license": "MIT",
+  "main": "index.js",
+  "bin": {
+    "opencode-memory-plugin": "bin/install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/csuwl/opencode-memory-plugin.git"
+  },
+  "keywords": [
+    "opencode",
+    "memory",
+    "plugin",
+    "ai",
+    "openclaw",
+    "vector-search",
+    "semantic-search"
+  ],
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "better-sqlite3": "latest",
@@ -12,5 +29,17 @@
   "devDependencies": {
     "@types/node": "latest",
     "typescript": "latest"
+  },
+  "files": [
+    "memory/",
+    "tools/",
+    "agents/",
+    "scripts/",
+    "bin/",
+    "index.js",
+    "README.npm.md"
+  ],
+  "scripts": {
+    "install": "node bin/install.js"
   }
 }

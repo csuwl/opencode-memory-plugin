@@ -36,24 +36,43 @@
 
 ### Installation
 
-#### Simple Installation (Recommended)
+#### Method 1: NPM Installation (Recommended - Easiest!)
+
+```bash
+# Install from npm registry
+npm install @csuwl/opencode-memory-plugin -g
+
+# That's it! The plugin will be automatically configured for you! 🧠
+```
+
+The npm installation automatically:
+- ✅ Creates memory directory structure (`~/.opencode/memory/`)
+- ✅ Copies all 9 memory files
+- ✅ Configures OpenCode to load memory into every session
+- ✅ Sets up automation agents
+- ✅ Initializes today's daily log
+
+**No manual configuration needed!**
+
+#### Method 2: Manual Installation from Git
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/opencode-memory-plugin.git
+git clone https://github.com/csuwl/opencode-memory-plugin.git
 cd opencode-memory-plugin
 
 # Run initialization script
-bash scripts/init.sh
+bash opencode-memory-plugin/scripts/init.sh
 
 # That's it! Your OpenCode now has memory 🧠
 ```
 
 The initialization script will:
-1. Create the memory directory structure
+1. Create memory directory structure
 2. Copy all memory files to `~/.opencode/memory/`
 3. Configure OpenCode to load memory into every session
 4. Set up automation agents
+5. Initialize today's daily log
 
 ### Usage
 
