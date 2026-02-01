@@ -1,0 +1,16 @@
+{
+  "name": "opencode-memory-plugin",
+  "version": "1.0.0",
+  "description": "OpenClaw-style memory system for OpenCode with full automation and local vector search",
+  "author": "opencode-memory-plugin",
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/plugin": "latest",
+    "better-sqlite3": "latest",
+    "sqlite-vec": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}

@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Test and temporary files
+test-env/
+test-data/
+test-env/memory/
+test-env/config/
+*.log
+
+# Docker
+*.log
+
+# Temporary files
+.DS_Store
+Thumbs.db
+*.swp
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+
+# Build artifacts
+*.tgz
+*.tar.gz
+*.zip
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+secrets/
+credentials/
+
+# Temporary test files
+tmp/
+build-*.log
