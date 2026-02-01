@@ -5,6 +5,8 @@
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/opencode-memory-plugin/blob/main/LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/opencode-memory-plugin/blob/main)
 [![OpenCode](https://img.shields.io/badge/OpenCode-compatible-success.svg)](https://docs.opencode.ai)
+[![npm](https://img.shields.io/badge/npm-%40csuwl%2Fopencode--memory--plugin-blue.svg)](https://www.npmjs.com/package/@csuwl/opencode-memory-plugin)
+[![Downloads](https://img.shields.io/npm/dt/@csuwl/opencode-memory-plugin)](https://www.npmjs.com/package/@csuwl/opencode-memory-plugin)
 
 ## 🎯 Features
 
@@ -39,8 +41,11 @@
 #### Method 1: NPM Installation (Recommended - Easiest!)
 
 ```bash
-# Install from npm registry
+# Install latest version from npm registry
 npm install @csuwl/opencode-memory-plugin -g
+
+# Or install a specific version
+npm install -g @csuwl/opencode-memory-plugin@1.0.0
 
 # That's it! The plugin will be automatically configured for you! 🧠
 ```

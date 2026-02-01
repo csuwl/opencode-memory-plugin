@@ -5,7 +5,14 @@
 ## Installation
 
 ```bash
+# Install latest version
 npm install @csuwl/opencode-memory-plugin -g
+
+# Or install a specific version
+npm install -g @csuwl/opencode-memory-plugin@1.0.0
+
+# Or install locally without -g
+npm install @csuwl/opencode-memory-plugin
 ```
 
 The plugin will be automatically configured for you!
