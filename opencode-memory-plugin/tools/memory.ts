@@ -1,9 +1,94 @@
 import { tool } from "@opencode-ai/plugin"
 import path from "path"
 import { readFile, writeFile, mkdir, readdir, stat, exists } from "fs/promises"
+import { loadConfig } from './config'
+import { getEmbedding } from './embeddings'
+import Database from "better-sqlite3"
 
 const MEMORY_DIR = path.join(process.env.HOME || "", ".opencode", "memory")
 const DAILY_DIR = path.join(MEMORY_DIR, "daily")
+const VECTOR_DB_PATH = path.join(MEMORY_DIR, "vector-index.db")
+
+/**
+ * Update vector index for a specific file
+ */
+async function updateVectorIndex(filePath: string, content: string) {
+  try {
+    const config = await loadConfig()
+
+    // Only update if auto-index is enabled
+    if (!config.autoIndex) {
+      return
+    }
+
+    const db = new Database(VECTOR_DB_PATH)
+
+    // Delete existing chunks for this file
+    const relativePath = path.relative(MEMORY_DIR, filePath)
+    db.prepare("DELETE FROM memory_chunks WHERE file_path = ?").run(relativePath)
+    db.prepare("DELETE FROM memory_fts WHERE rowid IN (SELECT id FROM memory_chunks WHERE file_path = ?)").run(relativePath)
+
+    // Split content into chunks
+    const lines = content.split('\n')
+    const chunks = []
+    const CHUNK_SIZE = config.indexing.chunkSize
+    const CHUNK_OVERLAP = config.indexing.chunkOverlap
+
+    let currentChunk: string[] = []
+    let startLine = 0
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      currentChunk.push(line)
+
+      const currentSize = currentChunk.join('\n').length
+      const targetSize = CHUNK_SIZE * 4
+
+      if (currentSize >= targetSize && currentChunk.length > CHUNK_OVERLAP / 4) {
+        const endLine = i + 1
+        chunks.push({
+          chunk: currentChunk.join('\n'),
+          line_start: startLine,
+          line_end: endLine,
+        })
+
+        const overlapLines = Math.floor(CHUNK_OVERLAP / 4)
+        currentChunk = currentChunk.slice(-overlapLines)
+        startLine = i - overlapLines + 1
+      }
+    }
+
+    // Add remaining content
+    if (currentChunk.length > 0) {
+      chunks.push({
+        chunk: currentChunk.join('\n'),
+        line_start: startLine,
+        line_end: lines.length,
+      })
+    }
+
+    // Embed and insert chunks
+    for (const chunkData of chunks) {
+      const embedding = await getEmbedding(chunkData.chunk, config)
+
+      db.prepare(`
+        INSERT INTO memory_chunks (file_path, chunk, line_start, line_end, embedding, metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        relativePath,
+        chunkData.chunk,
+        chunkData.line_start,
+        chunkData.line_end,
+        JSON.stringify(embedding),
+        JSON.stringify({ file: path.basename(filePath), lines: `${chunkData.line_start}-${chunkData.line_end}` }),
+      )
+    }
+
+    db.close()
+  } catch (error) {
+    console.error('Failed to update vector index:', error)
+  }
+}
 
 // Helper: Ensure memory directory structure exists
 async function ensureMemoryDirs() {
@@ -76,6 +161,17 @@ export const write = tool({
       } else {
         await writeFile(filePath, entry)
       }
+
+      // Auto-update vector index (async, don't block)
+      setImmediate(async () => {
+        try {
+          const content = await readFile(filePath, "utf-8")
+          await updateVectorIndex(filePath, content)
+        } catch (error) {
+          console.error('Failed to auto-update vector index:', error)
+        }
+      })
+
       return `✓ Memory saved to ${path.basename(filePath)}`
     } catch (error) {
       return `✗ Failed to write memory: ${(error as Error).message}`

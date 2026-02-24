@@ -1,25 +1,20 @@
 import { tool } from "@opencode-ai/plugin"
 import path from "path"
-import { readFile, exists, mkdir } from "fs/promises"
+import { readFile, exists, mkdir, readdir, stat } from "fs/promises"
 import Database from "better-sqlite3"
+import { loadConfig, DEFAULT_CONFIG } from './config'
+import { getEmbedding as getEmbeddingVector } from './embeddings'
 
 const MEMORY_DIR = path.join(process.env.HOME || "", ".opencode", "memory")
 const VECTOR_DB_PATH = path.join(MEMORY_DIR, "vector-index.db")
-const CHUNK_SIZE = 400 // Target tokens per chunk
-const CHUNK_OVERLAP = 80 // Overlap between chunks
+let CHUNK_SIZE = 400 // Target tokens per chunk
+let CHUNK_OVERLAP = 80 // Overlap between chunks
 
 // Helper: Ensure memory directory and vector database exist
 async function ensureVectorIndex() {
   await mkdir(MEMORY_DIR, { recursive: true })
 
   const db = new Database(VECTOR_DB_PATH)
-  
-  // Enable sqlite-vec extension if available
-  try {
-    db.loadExtension(path.join(__dirname, "..", "node_modules", "sqlite-vec", "dist", "sqlite-vec.node"))
-  } catch {
-    // Extension not available, will use in-memory fallback
-  }
 
   // Create vector table if not exists
   db.exec(`
@@ -47,29 +42,9 @@ async function ensureVectorIndex() {
   db.close()
 }
 
-// Helper: Get text embedding using local model
-async function getEmbedding(text: string): Promise<number[]> {
-  // This would use node-llama-cpp for local embeddings
-  // For now, return a simple hash-based embedding as fallback
-  // TODO: Integrate with node-llama-cpp
-  
-  const words = text.toLowerCase().split(/\s+/)
-  const embedding: number[] = []
-  
-  // Create a simple 384-dimension embedding (typical for small models)
-  for (let i = 0; i < 384; i++) {
-    let hash = 0
-    for (let j = 0; j < words.length; j++) {
-      const word = words[j]
-      for (let k = 0; k < word.length; k++) {
-        hash = ((hash << 5) - hash) + word.charCodeAt(k)
-        hash |= 0
-      }
-    }
-    embedding.push((hash % 1000) / 1000) // Normalize to 0-1
-  }
-  
-  return embedding
+// Helper: Get text embedding using configured provider
+async function getEmbedding(text: string, config = DEFAULT_CONFIG): Promise<number[]> {
+  return getEmbeddingVector(text, config)
 }
 
 // Helper: Split text into chunks
@@ -154,12 +129,17 @@ export const vector_search = tool({
   async execute(args) {
     await ensureVectorIndex()
 
+    // Load configuration
+    const config = await loadConfig()
+    CHUNK_SIZE = config.indexing.chunkSize
+    CHUNK_OVERLAP = config.indexing.chunkOverlap
+
     const query = args.query
     const limit = args.limit || 5
     const useHybrid = args.hybrid !== false // Default to true
 
-    // Get query embedding
-    const queryEmbedding = await getEmbedding(query)
+    // Get query embedding with config
+    const queryEmbedding = await getEmbedding(query, config)
     
     // Determine files to search and index
     const filesToIndex: string[] = []
@@ -304,6 +284,11 @@ export const rebuild_index = tool({
   async execute(args) {
     await ensureVectorIndex()
 
+    // Load configuration
+    const config = await loadConfig()
+    CHUNK_SIZE = config.indexing.chunkSize
+    CHUNK_OVERLAP = config.indexing.chunkOverlap
+
     const db = new Database(VECTOR_DB_PATH)
 
     try {
@@ -342,7 +327,7 @@ export const rebuild_index = tool({
 
       for (const fileName of filesToIndex) {
         const filePath = path.join(MEMORY_DIR, fileName)
-        
+
         try {
           if (!(await exists(filePath))) continue
 
@@ -351,8 +336,9 @@ export const rebuild_index = tool({
           const relativePath = path.basename(fileName)
 
           for (const chunk of chunks) {
-            const embedding = await getEmbedding(chunk.chunk)
-            
+            // Get embedding with config
+            const embedding = await getEmbedding(chunk.chunk, config)
+
             db.prepare(`
               INSERT INTO memory_chunks (file_path, chunk, line_start, line_end, embedding, metadata)
               VALUES (?, ?, ?, ?, ?, ?)
@@ -371,10 +357,19 @@ export const rebuild_index = tool({
           indexedFiles++
         } catch (error) {
           // Skip file on error
+          console.error(`Failed to index ${fileName}:`, error)
         }
       }
 
-      return `✓ Vector index rebuilt successfully!\n\nIndexed ${indexedFiles} file(s) with ${indexedChunks} chunk(s).\n\nUse vector_memory_search to find relevant memories.`
+      const provider = config.embedding.provider
+      const providerInfo = provider === 'openai'
+        ? `OpenAI (${config.embedding.model || 'text-embedding-3-small'})`
+        : provider
+
+      return `✓ Vector index rebuilt successfully!\n\n` +
+        `Indexed ${indexedFiles} file(s) with ${indexedChunks} chunk(s).\n` +
+        `Embedding provider: ${providerInfo}\n\n` +
+        `Use vector_memory_search to find relevant memories.`
     } finally {
       db.close()
     }
@@ -392,7 +387,7 @@ export const index_status = tool({
 
     try {
       const stats = db.prepare(`
-        SELECT 
+        SELECT
           COUNT(DISTINCT file_path) as files,
           COUNT(*) as chunks,
           MIN(created_at) as oldest,
@@ -400,9 +395,20 @@ export const index_status = tool({
         FROM memory_chunks
       `).get() as { files: number; chunks: number; oldest: string; newest: string }
 
+      // Load config to show embedding provider
+      const config = await loadConfig()
+
       if (stats.files === 0) {
         db.close()
-        return "Vector index is empty. No memories have been indexed yet.\n\nUse rebuild_index to create the index from your memory files."
+
+        const provider = config.embedding.provider
+        const providerInfo = provider === 'openai'
+          ? `OpenAI (${config.embedding.model || 'text-embedding-3-small'})`
+          : provider
+
+        return `Vector index is empty. No memories have been indexed yet.\n\n` +
+          `Embedding provider: ${providerInfo}\n` +
+          `Use rebuild_index to create the index from your memory files.`
       }
 
       let output = "📊 Vector Index Status\n\n"
@@ -410,9 +416,22 @@ export const index_status = tool({
       output += `Chunks Indexed: ${stats.chunks}\n`
       output += `Oldest Entry: ${stats.oldest}\n`
       output += `Newest Entry: ${stats.newest}\n`
-      
+
       const dbSize = (await stat(VECTOR_DB_PATH)).size / 1024
-      output += `Database Size: ${dbSize.toFixed(2)} KB\n`
+      output += `Database Size: ${dbSize.toFixed(2)} KB\n\n`
+
+      // Show embedding provider info
+      const provider = config.embedding.provider
+      const providerInfo = provider === 'openai'
+        ? `OpenAI (${config.embedding.model || 'text-embedding-3-small'})`
+        : provider
+      output += `Embedding Provider: ${providerInfo}\n`
+
+      const apiKey = process.env.OPENAI_API_KEY || config.embedding.apiKey
+      if (provider === 'openai' && !apiKey) {
+        output += `⚠️  Warning: OpenAI API key not configured. Using fallback hash-based embedding.\n`
+        output += `Set OPENAI_API_KEY environment variable for better semantic search.\n`
+      }
 
       return output
     } finally {

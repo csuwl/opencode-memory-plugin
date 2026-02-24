@@ -24,7 +24,8 @@
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "better-sqlite3": "latest",
-    "sqlite-vec": "latest"
+    "sqlite-vec": "latest",
+    "openai": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "latest",

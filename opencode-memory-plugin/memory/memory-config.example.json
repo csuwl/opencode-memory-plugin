@@ -1,0 +1,14 @@
+{
+  "embedding": {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "apiKey": "",
+    "baseURL": "",
+    "cacheEnabled": true
+  },
+  "autoIndex": true,
+  "indexing": {
+    "chunkSize": 400,
+    "chunkOverlap": 80
+  }
+}
