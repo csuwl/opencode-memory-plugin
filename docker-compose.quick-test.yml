@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # 轻量级 Embedding API 服务（使用 sentence-transformers）
+  embedding-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.embedding-api
+    container_name: local-embedding-api
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - embedding-test-net
+
+  # OpenCode 测试容器
+  opencode-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.opencode-test
+    container_name: opencode-embedding-test
+    depends_on:
+      embedding-api:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=test
+      - OPENAI_API_KEY=sk-test-key
+      - OPENAI_BASE_URL=http://embedding-api:8080/v1
+      - MEMORY_CONFIG_PROVIDER=openai
+      - MEMORY_CONFIG_MODEL=all-MiniLM-L6-v2
+    volumes:
+      - ./opencode-memory-plugin:/app
+      - memory-test-data:/root/.opencode/memory
+    working_dir: /app
+    networks:
+      - embedding-test-net
+    command: /app/test-embedding-integration.sh
+
+volumes:
+  memory-test-data:
+    driver: local
+
+networks:
+  embedding-test-net:
+    driver: bridge

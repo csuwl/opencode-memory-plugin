@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # LocalAI - 兼容 OpenAI API 的本地 embedding 服务
+  localai:
+    image: localai/localai:latest
+    container_name: localai-embedding
+    ports:
+      - "8080:8080"
+    volumes:
+      - localai-models:/models
+    environment:
+      - MODELS_PATH=/models
+      - DEBUG=true
+    command: >
+      bash -c "
+        echo 'Installing embedding model...' &&
+        curl -L https://modelstore.localai.io/bert-small-embeddings.gguf -o /models/bert-small.gguf &&
+        echo 'Creating model config...' &&
+        echo '{\"name\":\"bert-small\",\"backend\":\"llama\",\"embedding\":true,\"context_size\":512}' > /models/bert-small.yaml &&
+        echo 'Starting LocalAI...' &&
+        /usr/bin/localai run
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - memory-test-net
+
+  # OpenCode 测试容器
+  opencode-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.opencode-test
+    container_name: opencode-memory-test
+    depends_on:
+      localai:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=test
+      - OPENAI_API_KEY=sk-test-key-not-used
+      - OPENAI_BASE_URL=http://localai:8080/v1
+      - MEMORY_CONFIG_PROVIDER=openai
+      - MEMORY_CONFIG_MODEL=bert-small
+    volumes:
+      - ./opencode-memory-plugin:/app
+      - memory-data:/root/.opencode/memory
+    working_dir: /app
+    networks:
+      - memory-test-net
+    command: /app/test-embedding-integration.sh
+
+volumes:
+  localai-models:
+    driver: local
+  memory-data:
+    driver: local
+
+networks:
+  memory-test-net:
+    driver: bridge

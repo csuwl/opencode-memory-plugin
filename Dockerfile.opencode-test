@@ -1,0 +1,37 @@
+# Dockerfile for OpenCode with memory plugin
+FROM node:20-bullseye
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3 \
+    python3-pip \
+    git \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenCode CLI
+RUN npm install -g @opencode-ai/cli
+
+# Set working directory
+WORKDIR /app
+
+# Copy plugin files
+COPY opencode-memory-plugin/ /app/
+
+# Install dependencies
+RUN npm install
+
+# Create memory directory
+RUN mkdir -p /root/.opencode/memory/daily
+
+# Copy test script
+COPY scripts/test-embedding-integration.sh /app/
+RUN chmod +x /app/test-embedding-integration.sh
+
+# Verify OpenCode installation
+RUN opencode --version
+
+# Default command
+CMD ["/bin/bash"]
