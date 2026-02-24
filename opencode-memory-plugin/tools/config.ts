@@ -1,5 +1,4 @@
-import { readFile, writeFile, mkdir } from "fs/promises"
-import { exists } from "fs"
+import { readFile, writeFile, mkdir, access } from "fs/promises"
 import path from "path"
 
 const MEMORY_DIR = path.join(process.env.HOME || "", ".opencode", "memory")
@@ -48,8 +47,10 @@ export async function loadConfig(): Promise<MemoryConfig> {
     await mkdir(MEMORY_DIR, { recursive: true })
 
     // Check if config file exists
-    if (!(await exists(CONFIG_PATH))) {
-      // Create default config
+    try {
+      await access(CONFIG_PATH)
+    } catch {
+      // File doesn't exist, create default config
       await writeFile(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2))
       return DEFAULT_CONFIG
     }

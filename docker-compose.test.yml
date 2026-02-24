@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  memory-plugin-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: opencode-memory-test
+    volumes:
+      - ./opencode-memory-plugin:/app
+      - memory-data:/root/.opencode/memory
+    environment:
+      - NODE_ENV=test
+      - MEMORY_CONFIG_PROVIDER=none
+      - OPENAI_API_KEY=
+    working_dir: /app
+    command: /app/test-local-embedding.sh
+
+volumes:
+  memory-data:
+    driver: local

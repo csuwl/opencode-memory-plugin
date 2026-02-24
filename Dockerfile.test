@@ -1,0 +1,37 @@
+# Dockerfile for testing OpenCode Memory Plugin with local embedding
+FROM node:20-bullseye
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3 \
+    python3-pip \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy plugin files
+COPY opencode-memory-plugin/ /app/
+
+# Install dependencies
+RUN npm install
+
+# Create memory directory structure
+RUN mkdir -p /root/.opencode/memory/daily
+
+# Copy memory files
+RUN cp -r memory/* /root/.opencode/memory/ || echo "Memory files already in place"
+
+# Copy test script
+COPY scripts/test-local-embedding.sh /app/
+RUN chmod +x /app/test-local-embedding.sh
+
+# Set environment variables for local embedding (no API key)
+ENV MEMORY_CONFIG_PROVIDER=none
+ENV MEMORY_AUTO_INDEX=false
+
+# Default command
+CMD ["/bin/bash"]
