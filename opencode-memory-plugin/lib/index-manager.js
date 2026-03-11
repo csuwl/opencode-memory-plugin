@@ -12,11 +12,9 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getVectorStore } from './vector-store.js';
+import { getMemoryFiles, getMemoryDir } from './memory-files.js';
 
-const HOME = process.env.HOME || process.env.USERPROFILE;
-const MEMORY_DIR = path.join(HOME, '.opencode', 'memory');
-const DAILY_DIR = path.join(MEMORY_DIR, 'daily');
-const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
+const MEMORY_DIR = getMemoryDir();
 const HASH_FILE = path.join(MEMORY_DIR, '.index-hashes.json');
 const CONFIG_FILE = path.join(MEMORY_DIR, 'memory-config.json');
 
@@ -107,48 +105,7 @@ export class IndexManager {
    * @returns {Array<{path: string, name: string}>}
    */
   getMemoryFiles() {
-    const files = [];
-    
-    // Core memory files
-    const coreFiles = ['MEMORY.md', 'SOUL.md', 'AGENTS.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md'];
-    for (const file of coreFiles) {
-      const filePath = path.join(MEMORY_DIR, file);
-      if (fs.existsSync(filePath)) {
-        files.push({ path: filePath, name: file });
-      }
-    }
-    
-    // Daily logs - ALL files, no limit
-    if (fs.existsSync(DAILY_DIR)) {
-      const dailyFiles = fs.readdirSync(DAILY_DIR)
-        .filter(f => f.endsWith('.md'))
-        .sort()
-        .reverse(); // Most recent first
-      
-      for (const file of dailyFiles) {
-        files.push({ 
-          path: path.join(DAILY_DIR, file), 
-          name: `daily/${file}` 
-        });
-      }
-    }
-    
-    // Session records - ALL files, no limit
-    if (fs.existsSync(SESSIONS_DIR)) {
-      const sessionFiles = fs.readdirSync(SESSIONS_DIR)
-        .filter(f => f.endsWith('.md'))
-        .sort()
-        .reverse();
-      
-      for (const file of sessionFiles) {
-        files.push({ 
-          path: path.join(SESSIONS_DIR, file), 
-          name: `sessions/${file}` 
-        });
-      }
-    }
-    
-    return files;
+    return getMemoryFiles();
   }
 
   /**

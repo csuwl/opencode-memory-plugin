@@ -28,14 +28,15 @@
     "semantic-search"
   ],
   "dependencies": {
-    "@opencode-ai/plugin": "^1.2.15",
     "@huggingface/transformers": "^3.8.1",
+    "@opencode-ai/plugin": "^1.2.15",
     "better-sqlite3": "^11.7.0",
     "sqlite-vec": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
   },
   "files": [
     "memory/",
@@ -48,6 +49,9 @@
     "README.npm.md"
   ],
   "scripts": {
-    "install": "node bin/install.cjs"
+    "install": "node bin/install.cjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   }
 }

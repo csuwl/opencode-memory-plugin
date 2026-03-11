@@ -5,13 +5,31 @@ import { getVectorStore } from './lib/vector-store.js';
 import { BM25Index, createBM25Index } from './lib/bm25.js';
 import { getIndexManager } from './lib/index-manager.js';
 import { syncSessions, getSyncStatus, configureSync, autoSyncIfNeeded } from './lib/session-sync.js';
+import {
+  getMemoryFiles,
+  getMemoryDir,
+  getDailyDir,
+  getSessionsDir,
+  ensureDir,
+  generateSlug
+} from './lib/memory-files.js';
+import {
+  errors,
+  logger,
+  successResponse,
+  errorResponse,
+  ErrorCodes,
+  withErrorHandling
+} from './lib/errors.js';
 
-const HOME = process.env.HOME || process.env.USERPROFILE;
-const MEMORY_DIR = path.join(HOME, '.opencode', 'memory');
+const MEMORY_DIR = getMemoryDir();
 const MEMORY_FILE = path.join(MEMORY_DIR, 'MEMORY.md');
 const CONFIG_FILE = path.join(MEMORY_DIR, 'memory-config.json');
-const DAILY_DIR = path.join(MEMORY_DIR, 'daily');
-const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
+const DAILY_DIR = getDailyDir();
+const SESSIONS_DIR = getSessionsDir();
+
+// Content size limit (1MB)
+const MAX_CONTENT_SIZE = 1024 * 1024;
 
 /**
  * Read memory configuration
@@ -23,92 +41,6 @@ function getConfig() {
   } catch (e) {
     return null;
   }
-}
-
-/**
- * Get all memory files to index (unlimited - no time restriction)
- */
-function getMemoryFiles() {
-  const files = [];
-  
-  // Core memory files
-  const coreFiles = ['MEMORY.md', 'SOUL.md', 'AGENTS.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md'];
-  for (const file of coreFiles) {
-    const filePath = path.join(MEMORY_DIR, file);
-    if (fs.existsSync(filePath)) {
-      files.push({ path: filePath, name: file });
-    }
-  }
-  
-  // Daily logs - ALL files, no limit
-  if (fs.existsSync(DAILY_DIR)) {
-    const dailyFiles = fs.readdirSync(DAILY_DIR)
-      .filter(f => f.endsWith('.md'))
-      .sort()
-      .reverse(); // Most recent first
-    
-    for (const file of dailyFiles) {
-      files.push({ 
-        path: path.join(DAILY_DIR, file), 
-        name: `daily/${file}` 
-      });
-    }
-  }
-  
-  // Session records - ALL files, no limit
-  if (fs.existsSync(SESSIONS_DIR)) {
-    const sessionFiles = fs.readdirSync(SESSIONS_DIR)
-      .filter(f => f.endsWith('.md'))
-      .sort()
-      .reverse();
-    
-    for (const file of sessionFiles) {
-      files.push({ 
-        path: path.join(SESSIONS_DIR, file), 
-        name: `sessions/${file}` 
-      });
-    }
-  }
-  
-  return files;
-}
-
-/**
- * Generate a slug from content
- * @param {string} content - Content to extract keywords from
- * @returns {string} URL-friendly slug
- */
-function generateSlug(content) {
-  // Extract key phrases from content
-  const lines = content.split('\n').filter(l => l.trim());
-  
-  // Get first meaningful line (title or first paragraph)
-  let title = '';
-  for (const line of lines) {
-    const trimmed = line.trim();
-    // Skip markdown headings and empty lines
-    if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('*') && trimmed.length > 5) {
-      title = trimmed;
-      break;
-    }
-    // Use heading if no paragraph found
-    if (trimmed.startsWith('#') && !title) {
-      title = trimmed.replace(/^#+\s*/, '');
-    }
-  }
-  
-  if (!title) {
-    title = 'session';
-  }
-  
-  // Generate slug
-  return title
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .substring(0, 50)
-    .replace(/^-|-$/g, '');
 }
 
 /**
@@ -131,6 +63,16 @@ export const MemoryPlugin = async (ctx) => {
         async execute(args, context) {
           try {
             const { content, type, tags = [] } = args;
+
+            // Input validation
+            if (!content || content.trim().length === 0) {
+              return errorResponse(errors.invalidInput('Content cannot be empty'));
+            }
+
+            if (content.length > MAX_CONTENT_SIZE) {
+              return errorResponse(errors.contentTooLarge(MAX_CONTENT_SIZE, content.length));
+            }
+
             const timestamp = new Date().toISOString();
 
             const entry = `
@@ -146,9 +88,7 @@ ${content}
 `;
 
             // Ensure memory directory exists
-            if (!fs.existsSync(MEMORY_DIR)) {
-              fs.mkdirSync(MEMORY_DIR, { recursive: true });
-            }
+            ensureDir(MEMORY_DIR);
 
             // Append to memory file
             fs.appendFileSync(MEMORY_FILE, entry, 'utf-8');
@@ -158,20 +98,21 @@ ${content}
               const indexManager = getIndexManager();
               indexManager.queueUpdate(MEMORY_FILE, 'MEMORY.md');
             } catch (e) {
-              // Ignore indexing errors
+              logger.warn('Failed to queue index update', { error: e.message });
             }
 
-            return JSON.stringify({ success: true, 
+            logger.debug('Memory entry written', { type, tags, length: content.length });
+
+            return successResponse({
               message: "Entry written to memory",
               file: MEMORY_FILE,
               type,
               tags,
               length: content.length
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Failed to write memory entry', { error: e.message });
+            return errorResponse(errors.fileWriteError(MEMORY_FILE, e));
           }
         }
       }),
@@ -184,35 +125,34 @@ ${content}
         async execute(args, context) {
           try {
             const file = args.file || 'MEMORY.md';
-            
+
             // Security: Validate path to prevent directory traversal
             const resolvedPath = path.resolve(MEMORY_DIR, file);
             if (!resolvedPath.startsWith(path.resolve(MEMORY_DIR))) {
-              return JSON.stringify({ success: false,  error: "Invalid file path: directory traversal not allowed"  });
+              logger.warn('Path traversal attempt blocked', { requestedFile: file });
+              return errorResponse(errors.pathTraversal());
             }
-            
+
             const filePath = resolvedPath;
 
             if (!fs.existsSync(filePath)) {
-              return {
-                success: false,
-                error: `File not found: ${file}`
-              };
+              return errorResponse(errors.fileNotFound(file));
             }
 
             const content = fs.readFileSync(filePath, 'utf-8');
             const lines = content.split('\n').length;
 
-            return JSON.stringify({ success: true, 
+            logger.debug('Memory file read', { file, lines, size: content.length });
+
+            return successResponse({
               file,
               content,
               lines,
               size: Buffer.byteLength(content, 'utf-8')
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Failed to read memory file', { error: e.message, file: args.file });
+            return errorResponse(errors.fileReadError(args.file, e));
           }
         }
       }),
@@ -227,20 +167,23 @@ ${content}
           try {
             const query = args.query;
             const file = args.file || 'MEMORY.md';
-            
+
+            // Input validation
+            if (!query || query.trim().length === 0) {
+              return errorResponse(errors.invalidInput('Search query cannot be empty'));
+            }
+
             // Security: Validate path to prevent directory traversal
             const resolvedPath = path.resolve(MEMORY_DIR, file);
             if (!resolvedPath.startsWith(path.resolve(MEMORY_DIR))) {
-              return JSON.stringify({ success: false,  error: "Invalid file path: directory traversal not allowed"  });
+              logger.warn('Path traversal attempt blocked', { requestedFile: file });
+              return errorResponse(errors.pathTraversal());
             }
-            
+
             const filePath = resolvedPath;
 
             if (!fs.existsSync(filePath)) {
-              return {
-                success: false,
-                error: `File not found: ${file}`
-              };
+              return errorResponse(errors.fileNotFound(file));
             }
 
             const content = fs.readFileSync(filePath, 'utf-8');
@@ -257,16 +200,17 @@ ${content}
               }
             });
 
-            return JSON.stringify({ success: true, 
+            logger.debug('Memory search completed', { query, file, matchCount: matches.length });
+
+            return successResponse({
               query,
               file,
               matches,
               count: matches.length
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Memory search failed', { error: e.message, query: args.query });
+            return errorResponse(e);
           }
         }
       }),
@@ -281,50 +225,55 @@ ${content}
         },
         async execute(args, context) {
           const { query, mode, limit, threshold } = args;
-          
+
           // Input validation
+          if (!query || query.trim().length === 0) {
+            return errorResponse(errors.invalidInput('Search query cannot be empty'));
+          }
           if (threshold !== undefined && (threshold < 0 || threshold > 1)) {
-            return JSON.stringify({ success: false,  error: "threshold must be between 0 and 1"  });
+            return errorResponse(errors.invalidInput('threshold must be between 0 and 1'));
           }
           if (limit !== undefined && limit < 1) {
-            return JSON.stringify({ success: false,  error: "limit must be at least 1"  });
+            return errorResponse(errors.invalidInput('limit must be at least 1'));
           }
-          
+
           try {
             const config = getConfig();
 
             if (!config) {
-              return JSON.stringify({ success: false, 
-                error: "Memory configuration not found. Please run the initialization script."
-               });
+              return errorResponse(errors.configNotFound());
             }
 
             // Check if embedding is enabled
             if (!config.embedding?.enabled && config.embedding?.enabled !== undefined) {
-              return JSON.stringify({ success: false, 
+              return successResponse({
                 error: "Embedding is disabled in configuration",
-                suggestion: "Try using memory_search for keyword search instead"
-               });
+                suggestion: "Try using memory_search for keyword search instead",
+                code: ErrorCodes.CONFIG_INVALID
+              });
             }
 
             // Get vector store instance
             const vectorStore = getVectorStore();
-            
+
             // Initialize if needed
             let initResult;
             if (!vectorStore.initialized) {
-              initResult = await vectorStore.initialize({ 
-                model: config.embedding?.model 
+              initResult = await vectorStore.initialize({
+                model: config.embedding?.model
               });
-              
+
               if (!initResult.success) {
                 // Fall back to keyword search
-                return JSON.stringify({
-                  success: true,
+                logger.info('Vector search unavailable, falling back to keyword search', {
+                  error: initResult.error
+                });
+                const matches = await fallbackKeywordSearch(query, limit);
+                return successResponse({
                   query,
                   mode: 'keyword',
-                  matches: await fallbackKeywordSearch(query, limit),
-                  count: (await fallbackKeywordSearch(query, limit)).length,
+                  matches,
+                  count: matches.length,
                   note: `Vector search unavailable: ${initResult.error}. Using keyword search instead.`
                 });
               }
@@ -333,22 +282,27 @@ ${content}
             // Perform search based on mode
             let results;
             const searchMode = mode || config.search?.mode || 'hybrid';
-            
+
             if (searchMode === 'vector') {
               results = await vectorStore.search(query, { limit, threshold });
             } else if (searchMode === 'keyword') {
               results = vectorStore.keywordSearch(query, { limit });
             } else {
               // Hybrid mode (default)
-              results = await vectorStore.hybridSearch(query, { 
+              results = await vectorStore.hybridSearch(query, {
                 limit,
                 vectorWeight: config.search?.options?.hybrid?.vectorWeight || 0.7,
                 keywordWeight: config.search?.options?.hybrid?.keywordWeight || 0.3
               });
             }
 
-            return JSON.stringify({
-              success: true,
+            logger.debug('Vector memory search completed', {
+              query,
+              mode: searchMode,
+              resultCount: results.length
+            });
+
+            return successResponse({
               query,
               mode: searchMode,
               matches: results.map(r => ({
@@ -363,13 +317,14 @@ ${content}
               indexed: vectorStore.getIndexedCount()
             });
           } catch (e) {
+            logger.error('Vector memory search failed', { error: e.message, query });
             // Fall back to keyword search on error
-            return JSON.stringify({
-              success: true,
+            const matches = await fallbackKeywordSearch(query, 10);
+            return successResponse({
               query,
               mode: 'keyword',
-              matches: await fallbackKeywordSearch(query, 10),
-              count: (await fallbackKeywordSearch(query, 10)).length,
+              matches,
+              count: matches.length,
               note: `Vector search failed: ${e.message}. Using keyword search.`
             });
           }
@@ -386,11 +341,11 @@ ${content}
             const { days } = args;
 
             if (!fs.existsSync(DAILY_DIR)) {
-              return JSON.stringify({ success: true, 
+              return successResponse({
                 files: [],
                 count: 0,
                 message: "Daily directory not found"
-               });
+              });
             }
 
             const allFiles = fs.readdirSync(DAILY_DIR)
@@ -409,14 +364,13 @@ ${content}
               };
             });
 
-            return JSON.stringify({ success: true, 
+            return successResponse({
               files,
               count: files.length
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Failed to list daily logs', { error: e.message });
+            return errorResponse(e);
           }
         }
       }),
@@ -430,17 +384,15 @@ ${content}
             const dailyFile = path.join(DAILY_DIR, `${today}.md`);
 
             if (fs.existsSync(dailyFile)) {
-              return JSON.stringify({ success: true, 
+              return successResponse({
                 message: "Daily log already exists",
                 file: dailyFile,
                 date: today
-               });
+              });
             }
 
             // Create daily directory if needed
-            if (!fs.existsSync(DAILY_DIR)) {
-              fs.mkdirSync(DAILY_DIR, { recursive: true });
-            }
+            ensureDir(DAILY_DIR);
 
             const content = `# Daily Memory Log - ${today}
 
@@ -462,18 +414,19 @@ ${content}
               const indexManager = getIndexManager();
               indexManager.queueUpdate(dailyFile, `daily/${today}.md`);
             } catch (e) {
-              // Ignore indexing errors
+              logger.warn('Failed to queue index update for daily log', { error: e.message });
             }
 
-            return JSON.stringify({ success: true, 
+            logger.info('Daily log created', { date: today, file: dailyFile });
+
+            return successResponse({
               message: "Daily log created",
               file: dailyFile,
               date: today
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Failed to initialize daily log', { error: e.message });
+            return errorResponse(e);
           }
         }
       }),
@@ -489,9 +442,7 @@ ${content}
             const config = getConfig();
 
             if (!config) {
-              return JSON.stringify({ success: false,
-                error: "Memory configuration not found. Please run the initialization script."
-               });
+              return errorResponse(errors.configNotFound());
             }
 
             // Get vector store instance
@@ -506,17 +457,19 @@ ${content}
             const files = getMemoryFiles();
 
             if (files.length === 0) {
-              return JSON.stringify({ success: true,
+              return successResponse({
                 message: "No memory files found to index",
                 indexedFiles: 0,
                 totalChunks: 0
-               });
+              });
             }
 
             // If model failed to load, return success with warning (keyword search still works)
             if (!initResult.success) {
-              return JSON.stringify({
-                success: true,
+              logger.warn('Vector indexing unavailable, keyword search only', {
+                error: initResult.error
+              });
+              return successResponse({
                 message: "Index created with keyword search only (vector search unavailable)",
                 warning: `Vector indexing skipped: ${initResult.error}`,
                 model: initResult.model || config.embedding?.model || 'Xenova/all-MiniLM-L6-v2',
@@ -547,6 +500,7 @@ ${content}
                 results.push({ file: file.name, indexed: result.indexed });
                 totalChunks += result.indexed;
               } catch (e) {
+                logger.warn('Failed to index file', { file: file.name, error: e.message });
                 results.push({ file: file.name, error: e.message });
               }
             }
@@ -554,7 +508,13 @@ ${content}
             // Get final status
             const status = vectorStore.getStatus();
 
-            return JSON.stringify({ success: true,
+            logger.info('Index rebuild completed', {
+              files: files.length,
+              totalChunks,
+              force
+            });
+
+            return successResponse({
               message: "Index rebuild completed",
               force,
               model: status.model,
@@ -563,11 +523,10 @@ ${content}
               totalChunks,
               results,
               lastIndexed: status.lastIndexed
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false,
-              error: e.message
-             });
+            logger.error('Index rebuild failed', { error: e.message });
+            return errorResponse(errors.indexBuildFailed(e.message));
           }
         }
       }),
@@ -580,9 +539,7 @@ ${content}
             const config = getConfig();
 
             if (!config) {
-              return JSON.stringify({ success: false, 
-                error: "Configuration not found"
-               });
+              return errorResponse(errors.configNotFound());
             }
 
             // Check memory files
@@ -606,15 +563,14 @@ ${content}
             // Get vector store status
             const vectorStore = getVectorStore();
             let vectorStatus = { initialized: false };
-            
+
             try {
               vectorStatus = vectorStore.getStatus();
             } catch (e) {
-              // Vector store not initialized
+              logger.debug('Vector store status check failed', { error: e.message });
             }
 
-            return JSON.stringify({
-              success: true,
+            return successResponse({
               config: {
                 version: config.version,
                 searchMode: config.search?.mode,
@@ -634,13 +590,12 @@ ${content}
               }
             });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Failed to get index status', { error: e.message });
+            return errorResponse(e);
           }
         }
-      })
-,
+      }),
+
 
       update_index: tool({
         description: "Incrementally update the vector search index. Only processes files that have changed since last indexing.",
@@ -652,14 +607,12 @@ ${content}
             const { force } = args;
             const indexManager = getIndexManager();
             const result = await indexManager.rebuildIndex(force);
-            return JSON.stringify({
-              success: result.success,
+            return successResponse({
               ...result
             });
           } catch (e) {
-            return JSON.stringify({ success: false,
-              error: e.message
-             });
+            logger.error('Failed to update index', { error: e.message });
+            return errorResponse(e);
           }
         }
       }),
@@ -675,22 +628,24 @@ ${content}
           try {
             // Input validation
             if (args.debounceDelay !== undefined && args.debounceDelay < 0) {
-              return JSON.stringify({ success: false,  error: "debounceDelay must be a positive number"  });
+              return errorResponse(errors.invalidInput('debounceDelay must be a positive number'));
             }
             if (args.batchSize !== undefined && args.batchSize < 1) {
-              return JSON.stringify({ success: false,  error: "batchSize must be at least 1"  });
+              return errorResponse(errors.invalidInput('batchSize must be at least 1'));
             }
-            
+
             const indexManager = getIndexManager();
             const config = indexManager.configure(args);
-            return JSON.stringify({ success: true, 
+
+            logger.info('Index configuration updated', { config: config.indexing });
+
+            return successResponse({
               message: "Index configuration updated",
               config: config.indexing
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Failed to configure index', { error: e.message });
+            return errorResponse(e);
           }
         }
       }),
@@ -705,14 +660,22 @@ ${content}
         async execute(args, context) {
           try {
             const { title, content, tags = [] } = args;
+
+            // Input validation
+            if (!content || content.trim().length === 0) {
+              return errorResponse(errors.invalidInput('Content cannot be empty'));
+            }
+
+            if (content.length > MAX_CONTENT_SIZE) {
+              return errorResponse(errors.contentTooLarge(MAX_CONTENT_SIZE, content.length));
+            }
+
             const timestamp = new Date().toISOString();
             const date = timestamp.split('T')[0];
             const time = timestamp.split('T')[1].split('.')[0].replace(/:/g, '-');
 
             // Create sessions directory if needed
-            if (!fs.existsSync(SESSIONS_DIR)) {
-              fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-            }
+            ensureDir(SESSIONS_DIR);
 
             // Generate filename
             const slug = generateSlug(content);
@@ -739,19 +702,20 @@ ${content}
               const indexManager = getIndexManager();
               indexManager.queueUpdate(sessionFile, `sessions/${fileName}`);
             } catch (e) {
-              // Ignore indexing errors
+              logger.warn('Failed to queue index update for session', { error: e.message });
             }
 
-            return JSON.stringify({ success: true, 
+            logger.info('Session saved', { title: sessionTitle, file: fileName });
+
+            return successResponse({
               message: "Session saved",
               file: sessionFile,
               title: sessionTitle,
               tags
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false, 
-              error: e.message
-             });
+            logger.error('Failed to save session', { error: e.message });
+            return errorResponse(e);
           }
         }
       }),
@@ -766,11 +730,11 @@ ${content}
             const { limit } = args;
 
             if (!fs.existsSync(SESSIONS_DIR)) {
-              return JSON.stringify({ success: true, 
+              return successResponse({
                 sessions: [],
                 count: 0,
                 message: "Sessions directory not found"
-               });
+              });
             }
 
             const files = fs.readdirSync(SESSIONS_DIR)
@@ -790,14 +754,13 @@ ${content}
               };
             });
 
-            return JSON.stringify({ success: true,
+            return successResponse({
               sessions,
               count: sessions.length
-             });
+            });
           } catch (e) {
-            return JSON.stringify({ success: false,
-              error: e.message
-             });
+            logger.error('Failed to list sessions', { error: e.message });
+            return errorResponse(e);
           }
         }
       }),
@@ -812,9 +775,10 @@ ${content}
           try {
             const { force, limit } = args;
             const result = await syncSessions({ force, limit });
-            return JSON.stringify(result);
+            return successResponse(result);
           } catch (e) {
-            return JSON.stringify({ success: false, error: e.message });
+            logger.error('Failed to sync sessions', { error: e.message });
+            return errorResponse(errors.syncFailed(e.message));
           }
         }
       }),
@@ -825,9 +789,10 @@ ${content}
         async execute(args, context) {
           try {
             const status = getSyncStatus();
-            return JSON.stringify({ success: true, ...status });
+            return successResponse(status);
           } catch (e) {
-            return JSON.stringify({ success: false, error: e.message });
+            logger.error('Failed to get sync status', { error: e.message });
+            return errorResponse(e);
           }
         }
       }),
@@ -842,9 +807,10 @@ ${content}
         async execute(args, context) {
           try {
             const result = configureSync(args);
-            return JSON.stringify(result);
+            return successResponse(result);
           } catch (e) {
-            return JSON.stringify({ success: false, error: e.message });
+            logger.error('Failed to configure sync', { error: e.message });
+            return errorResponse(e);
           }
         }
       })
